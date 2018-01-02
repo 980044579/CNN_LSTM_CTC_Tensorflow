@@ -26,7 +26,7 @@ class LSTMOCR(object):
         self.merged_summay = tf.summary.merge_all()
 
     def _build_model(self):
-        filters = [64, 128, 128, FLAGS.max_stepsize]
+        filters = [64, 128, 128, 256]
         strides = [1, 2]
 
         with tf.variable_scope('cnn'):
@@ -56,11 +56,10 @@ class LSTMOCR(object):
 
         with tf.variable_scope('lstm'):
             # [batch_size, max_stepsize, num_features]
-            x = tf.reshape(x, [FLAGS.batch_size, -1, filters[3]])
-            x = tf.transpose(x, [0, 2, 1])  # batch_size * 64 * 48
-            # shp = x.get_shape().as_list()
-            # x.set_shape([FLAGS.batch_size, filters[3], shp[1]])
-            x.set_shape([FLAGS.batch_size, filters[3], 48])
+            # 12 = image_width/2/2/2/2  and   4 = image_height/2/2/2/2
+            x = tf.transpose(x, [0, 2, 1, 3])  # batch_size * width * height * channels
+            x = tf.reshape(x, [FLAGS.batch_size, 12, -1]) 
+            x.set_shape([FLAGS.batch_size, 12, filters[3]*4])
 
             # tf.nn.rnn_cell.RNNCell, tf.nn.rnn_cell.GRUCell
             cell = tf.contrib.rnn.LSTMCell(FLAGS.num_hidden, state_is_tuple=True)
