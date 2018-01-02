@@ -2,6 +2,17 @@
 
 CNN+LSTM+CTC based OCR(Optical Character Recognition) implemented using tensorflow. 
 
+**Update 2018-1-2**:
+Some big bugs have fixed...  The length of max_steps in RNN
+
+
+**Update 2017.11.6**:
+The competiton page is not available now, if you want to reproduce this result, please see this [issue](https://github.com/watsonyanghx/CNN_LSTM_CTC_Tensorflow/issues/2) about dataset， the lable file (a .txt file) is in the same folder with images after extracting .tar.gz file.
+
+
+
+
+
 **Note:** there is **No** restriction on the number of characters in the image (variable length). Have a look at the image bellow.
 
 I trained a model with 100k images using this code and got 99.75% accuracy on test dataset (200k images) in the [competition](http://meizu.baiducloud.top). The images in both dataset:
