@@ -2,23 +2,74 @@ import datetime
 import logging
 import os
 import time
+import sys
 
-import cv2
+
 import numpy as np
 import tensorflow as tf
 
+from skimage import io
+from skimage import transform
+
+import cnn_rhn_otc_ocr
 import cnn_lstm_otc_ocr
+import cnn_rhn_lstm_ctc
+import cnn_gru_otc_ocr
+import cnn_nslstm_otc_ocr
+import cnn_ns2lstm_otc_ocr
+import cnn_nsnlstm_otc_ocr
+import cnn_hlstm_otc_ocr
+import cnn_reslstm_otc_ocr
+
 import utils
 import helper
 
+import matplotlib.pyplot as plt
+
 FLAGS = utils.FLAGS
 
-logger = logging.getLogger('Traing for OCR using CNN+LSTM+CTC')
+os.environ['CUDA_VISIBLE_DEVICES']=FLAGS.gpu_idex
+
+
+logger = logging.getLogger('Traing for OCR using CNN+' + FLAGS.model +'+CTC')
 logger.setLevel(logging.INFO)
+
+def demo_test(a,b):
+    
+    a=np.array(a);
+    #max_indx=np.argmax(a)#max value index
+    #min_indx=np.argmin(a)#min value index
+    plt.plot(a,'r-o')
+    #plt.plot(max_indx,a[max_indx],'ks')
+    #show_max='epoch:'+str(b[max_indx])+'  acc:'+str(a[max_indx])
+    #plt.annotate(show_max,xytext=(max_indx,a[max_indx]),xy=(max_indx,a[max_indx]))
+    #plt.plot(min_indx,a[min_indx],'gs')
+    plt.savefig(FLAGS.log_dir + '.png')
+    plt.close(0)
 
 
 def train(train_dir=None, val_dir=None, mode='train'):
-    model = cnn_lstm_otc_ocr.LSTMOCR(mode)
+    if FLAGS.model == 'rhn':
+        model = cnn_rhn_otc_ocr.LSTMOCR(mode)
+    elif FLAGS.model == 'lstm':
+        model = cnn_lstm_otc_ocr.LSTMOCR(mode)
+    elif FLAGS.model == 'lstm_rhn':
+        model = cnn_rhn_lstm_ctc.LSTMOCR(mode)
+    elif FLAGS.model == 'gru':
+        model = cnn_gru_otc_ocr.LSTMOCR(mode)
+    elif FLAGS.model == 'nslstm':
+        model =cnn_nslstm_otc_ocr.LSTMOCR(mode)
+    elif FLAGS.model == 'ns2lstm':
+        model =cnn_ns2lstm_otc_ocr.LSTMOCR(mode)
+    elif FLAGS.model == 'nsnlstm':
+        model =cnn_nsnlstm_otc_ocr.LSTMOCR(mode)
+    elif FLAGS.model == 'hlstm':
+        model =cnn_hlstm_otc_ocr.LSTMOCR(mode)
+    elif FLAGS.model == 'reslstm':
+        model =cnn_reslstm_otc_ocr.LSTMOCR(mode)
+    else:
+        print("no such model")
+        sys.exit()
     model.build_graph()
 
     print('loading train data, please wait---------------------')
@@ -26,7 +77,7 @@ def train(train_dir=None, val_dir=None, mode='train'):
     print('get image: ', train_feeder.size)
 
     print('loading validation data, please wait---------------------')
-    val_feeder = utils.DataIterator(data_dir=val_dir)
+    val_feeder = utils.DataIterator(data_dir=val_dir,istrain=False)
     print('get image: ', val_feeder.size)
 
     num_train_samples = train_feeder.size  # 100000
@@ -51,6 +102,10 @@ def train(train_dir=None, val_dir=None, mode='train'):
                     print('restore from the checkpoint{0}'.format(ckpt))
 
             print('=============================begin training=============================')
+            accuracy_res = []
+            epoch_res = []
+            tmp_max = 0
+            tmp_epoch = 0
             for cur_epoch in range(FLAGS.num_epochs):
                 shuffle_idx = np.random.permutation(num_train_samples)
                 train_cost = 0
@@ -96,7 +151,7 @@ def train(train_dir=None, val_dir=None, mode='train'):
                         acc_batch_total = 0
                         lastbatch_err = 0
                         lr = 0
-                        for j in xrange(num_batches_per_epoch_val):
+                        for j in range(num_batches_per_epoch_val):
                             indexs_val = [shuffle_idx_val[i % num_val_samples] for i in
                                           range(j * FLAGS.batch_size, (j + 1) * FLAGS.batch_size)]
                             val_inputs, val_seq_len, val_labels = \
@@ -105,7 +160,7 @@ def train(train_dir=None, val_dir=None, mode='train'):
                                         model.labels: val_labels,
                                         model.seq_len: val_seq_len}
 
-                            dense_decoded, lastbatch_err, lr = \
+                            dense_decoded, lr = \
                                 sess.run([model.dense_decoded, model.lrn_rate],
                                          val_feed)
 
@@ -114,18 +169,22 @@ def train(train_dir=None, val_dir=None, mode='train'):
                             acc = utils.accuracy_calculation(ori_labels, dense_decoded,
                                                              ignore_value=-1, isPrint=True)
                             acc_batch_total += acc
-
                         accuracy = (acc_batch_total * FLAGS.batch_size) / num_val_samples
-
+                        accuracy_res.append(accuracy)
+                        epoch_res.append(cur_epoch)
+                        if accuracy > tmp_max:
+                            tmp_max = accuracy
+                            tmp_epoch = cur_epoch
+                        demo_test(accuracy_res,epoch_res)
                         avg_train_cost = train_cost / ((cur_batch + 1) * FLAGS.batch_size)
 
                         # train_err /= num_train_samples
                         now = datetime.datetime.now()
                         log = "{}/{} {}:{}:{} Epoch {}/{}, " \
-                              "accuracy = {:.3f},avg_train_cost = {:.3f}, " \
+                              "max_accuracy = {:.3f},max_Epoch {},accuracy = {:.3f},acc_batch_total = {:.3f},avg_train_cost = {:.3f}, " \
                               " time = {:.3f},lr={:.8f}"
                         print(log.format(now.month, now.day, now.hour, now.minute, now.second,
-                                         cur_epoch + 1, FLAGS.num_epochs, accuracy, avg_train_cost,
+                                         cur_epoch + 1, FLAGS.num_epochs, tmp_max,tmp_epoch, accuracy,acc_batch_total,avg_train_cost,
                                          time.time() - start_time, lr))
 
 
@@ -152,13 +211,15 @@ def infer(img_path, mode='infer'):
             print('cannot restore')
 
         decoded_expression = []
-        for curr_step in xrange(total_steps):
+        for curr_step in range(total_steps):
 
             imgs_input = []
             seq_len_input = []
             for img in imgList[curr_step * FLAGS.batch_size: (curr_step + 1) * FLAGS.batch_size]:
-                im = cv2.imread(img, 0).astype(np.float32) / 255.
-                im = np.reshape(im, [FLAGS.image_height, FLAGS.image_width, FLAGS.image_channel])
+                
+                im = io.imread(img,as_grey=True)
+                im = transform.resize(im, (FLAGS.image_height, FLAGS.image_width, FLAGS.image_channel))
+                
 
                 def get_input_lens(seqs):
                     length = np.array([FLAGS.max_stepsize for _ in seqs], dtype=np.int64)
@@ -197,7 +258,7 @@ def main(_):
     if FLAGS.num_gpus == 0:
         dev = '/cpu:0'
     elif FLAGS.num_gpus == 1:
-        dev = '/gpu:0'
+        dev = '/gpu:' + FLAGS.gpu_idex
     else:
         raise ValueError('Only support 0 or 1 gpu.')
 
@@ -211,4 +272,5 @@ def main(_):
 
 if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)
+    print("plese enter model_name,gpu_idex,log_dir at lesast")
     tf.app.run()
