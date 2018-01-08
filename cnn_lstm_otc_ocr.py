@@ -26,75 +26,93 @@ class LSTMOCR(object):
         self.merged_summay = tf.summary.merge_all()
 
     def _build_model(self):
-        filters = [64, 128, 128, 256]
+        filters = [64, 128, 256, 512]
         strides = [1, 2]
 
         with tf.variable_scope('cnn'):
             with tf.variable_scope('unit-1'):
-                x = self._conv2d(self.inputs, 'cnn-1', 3, 1, filters[0], strides[0])
-                x = self._batch_norm('bn1', x)
+                x = self._conv2d(self.inputs, 'cnn-1', [3,3], 1, filters[0], [1,1])
+                #x = self._batch_norm('bn1', x)
                 x = self._leaky_relu(x, 0.01)
-                x = self._max_pool(x, 2, strides[1])
+                x = self._max_pool(x, [2,2], [2,2])
+                print(x.shape)
 
             with tf.variable_scope('unit-2'):
-                x = self._conv2d(x, 'cnn-2', 3, filters[0], filters[1], strides[0])
-                x = self._batch_norm('bn2', x)
+                x = self._conv2d(x, 'cnn-2', [3,3], filters[0], filters[1], [1,1])
+                #x = self._batch_norm('bn2', x)
                 x = self._leaky_relu(x, 0.01)
-                x = self._max_pool(x, 2, strides[1])
+                x = self._max_pool(x, [2,2], [2,2])
+                print(x.shape)
 
             with tf.variable_scope('unit-3'):
-                x = self._conv2d(x, 'cnn-3', 3, filters[1], filters[2], strides[0])
-                x = self._batch_norm('bn3', x)
+                x = self._conv2d(x, 'cnn-3_1', [3,3], filters[1], filters[2], [1,1])
+                x = self._batch_norm('bn3_1', x)
                 x = self._leaky_relu(x, 0.01)
-                x = self._max_pool(x, 2, strides[1])
+
+                
+                x = self._conv2d(x, 'cnn-3_2', [3,3], filters[2], filters[2], [1,1])
+                x = self._leaky_relu(x, 0.01)
+                x =self._max_pool(x,[2,1],[2,1])
+                  
+                print(x.shape)
 
             with tf.variable_scope('unit-4'):
-                x = self._conv2d(x, 'cnn-4', 3, filters[2], filters[3], strides[0])
-                x = self._batch_norm('bn4', x)
+                x = self._conv2d(x, 'cnn-4_1', [3,3], filters[2], filters[3], [1,1])
+                x = tf.contrib.layers.batch_norm(x, scale=True, decay=0.99, scope='bn_41')
+                #x = self._batch_norm('bn4_1', x)
                 x = self._leaky_relu(x, 0.01)
-                x = self._max_pool(x, 2, strides[1])
-
-        with tf.variable_scope('lstm'):
+                #x = self._max_pool(x, [2,1], [2,1])
+                
+                x = self._conv2d(x, 'cnn-4_2', [2,2], filters[3], filters[3], [1,1])
+                x = tf.contrib.layers.batch_norm(x, scale=True, decay=0.99, scope='bn_42')
+                x = self._batch_norm('bn4_2', x)
+                x = self._leaky_relu(x, 0.01)
+            
+                print(x.shape)
+                
             # [batch_size, max_stepsize, num_features]
-            # 12 = image_width/2/2/2/2  and   4 = image_height/2/2/2/2
-            x = tf.transpose(x, [0, 2, 1, 3])  # batch_size * width * height * channels
-            x = tf.reshape(x, [FLAGS.batch_size, 12, -1]) 
-            x.set_shape([FLAGS.batch_size, 12, filters[3]*4])
+            
+            
+                #x = tf.reshape(x, [FLAGS.batch_size,-1,512])
+                x = tf.transpose(x, [0, 2, 1,3])
+                x = tf.reshape(x, [FLAGS.batch_size,45,-1])
+                x.set_shape([FLAGS.batch_size,45, 2048])
+                print(x.shape)
+            #x = tf.transpose(x, [0, 2, 1])  # batch_size * 64 * 48
+            #shp = x.get_shape().as_list()
+            #x.set_shape([FLAGS.batch_size, filters[3], shp[1]])
+            #x.set_shape([FLAGS.batch_size, filters[3], 48])
 
             # tf.nn.rnn_cell.RNNCell, tf.nn.rnn_cell.GRUCell
-            cell = tf.contrib.rnn.LSTMCell(FLAGS.num_hidden, state_is_tuple=True)
-            if self.mode == 'train':
-                cell = tf.contrib.rnn.DropoutWrapper(cell=cell, output_keep_prob=0.8)
 
-            cell1 = tf.contrib.rnn.LSTMCell(FLAGS.num_hidden, state_is_tuple=True)
-            if self.mode == 'train':
-                cell1 = tf.contrib.rnn.DropoutWrapper(cell=cell1, output_keep_prob=0.8)
+                    #*************************layer rnn **************************
 
-            # Stacking rnn cells
-            stack = tf.contrib.rnn.MultiRNNCell([cell, cell1], state_is_tuple=True)
+        for i in range(FLAGS.rnn_layers):            
+            with tf.variable_scope('lstm_' + str(i)):
+                lstm_fw = tf.contrib.rnn.LSTMCell(FLAGS.num_hidden)
+                lstm_bw = tf.contrib.rnn.LSTMCell(FLAGS.num_hidden)
+                output, state = tf.nn.bidirectional_dynamic_rnn(lstm_fw, lstm_bw, x , scope='bi_lstm' + str(i), dtype=tf.float32)
+                x = tf.concat(output, axis=2)
+                print('lstm_'+ str(i) +':  ', x.get_shape())
 
-            # The second output is the last state and we will not use that
-            outputs, _ = tf.nn.dynamic_rnn(stack, x, self.seq_len, dtype=tf.float32)
+            
+                    #*************************layer lstm_0 **************************
+            
+        outputs = tf.reshape(x, [-1, 2 * FLAGS.num_hidden])
 
-            # Reshaping to apply the same weights over the timesteps
-            outputs = tf.reshape(outputs, [-1, FLAGS.num_hidden])
+        W = tf.Variable(tf.truncated_normal([2 * FLAGS.num_hidden, num_classes], stddev=0.1), name="w_dense") 
+        b = tf.Variable(tf.constant(0., shape=[num_classes]), name="b_dense") 
 
-            W = tf.get_variable(name='W',
-                                shape=[FLAGS.num_hidden, num_classes],
-                                dtype=tf.float32,
-                                initializer=tf.contrib.layers.xavier_initializer())
-            b = tf.get_variable(name='b',
-                                shape=[num_classes],
-                                dtype=tf.float32,
-                                initializer=tf.constant_initializer())
-
-            self.logits = tf.matmul(outputs, W) + b
+        # Doing the affine projection 
+        self.logits = tf.matmul(outputs, W) + b
             # Reshaping back to the original shape
-            shape = tf.shape(x)
-            self.logits = tf.reshape(self.logits, [shape[0], -1, num_classes])
+        shape = tf.shape(x)
+        self.logits = tf.reshape(self.logits, [FLAGS.batch_size, -1, num_classes])
             # Time major
-            self.logits = tf.transpose(self.logits, (1, 0, 2))
+        self.logits = tf.transpose(self.logits, (1, 0, 2))
 
+        
+        
     def _build_train_op(self):
         self.global_step = tf.Variable(0, trainable=False)
 
@@ -136,7 +154,7 @@ class LSTMOCR(object):
     def _conv2d(self, x, name, filter_size, in_channels, out_channels, strides):
         with tf.variable_scope(name):
             kernel = tf.get_variable(name='DW',
-                                     shape=[filter_size, filter_size, in_channels, out_channels],
+                                     shape=[filter_size[0], filter_size[1], in_channels, out_channels],
                                      dtype=tf.float32,
                                      initializer=tf.contrib.layers.xavier_initializer())
 
@@ -145,7 +163,7 @@ class LSTMOCR(object):
                                 dtype=tf.float32,
                                 initializer=tf.constant_initializer())
 
-            con2d_op = tf.nn.conv2d(x, kernel, [1, strides, strides, 1], padding='SAME')
+            con2d_op = tf.nn.conv2d(x, kernel, [1, strides[0], strides[1], 1], padding='SAME')
 
         return tf.nn.bias_add(con2d_op, b)
 
@@ -200,7 +218,7 @@ class LSTMOCR(object):
 
     def _max_pool(self, x, ksize, strides):
         return tf.nn.max_pool(x,
-                              ksize=[1, ksize, ksize, 1],
-                              strides=[1, strides, strides, 1],
+                              ksize=[1, ksize[0], ksize[1], 1],
+                              strides=[1, strides[0], strides[1], 1],
                               padding='SAME',
                               name='max_pool')
