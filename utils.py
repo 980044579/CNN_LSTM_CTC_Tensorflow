@@ -1,78 +1,116 @@
 import os
 import numpy as np
 import tensorflow as tf
-import cv2
+from skimage import io
+from skimage import transform
 
 # +-* + () + 10 digit + blank + space
-num_classes = 3 + 2 + 10 + 1 + 1
+num_classes = 26+26+10+1+1
 
 maxPrintLen = 100
 
-tf.app.flags.DEFINE_boolean('restore', False, 'whether to restore from the latest checkpoint')
-tf.app.flags.DEFINE_string('checkpoint_dir', './checkpoint/', 'the checkpoint dir')
-tf.app.flags.DEFINE_float('initial_learning_rate', 1e-3, 'inital lr')
+tf.app.flags.DEFINE_integer('rhn_steps', 8 ,'number of rhn steps')
+tf.app.flags.DEFINE_string('checkpoint_dir', './checkpoint/hlstm_8', 'the checkpoint dir')
+tf.app.flags.DEFINE_integer('rnn_layers', 8 ,'number of rnn layers')
+tf.app.flags.DEFINE_string('gpu_idex', '8' ,'index of gpu' )
+tf.app.flags.DEFINE_string('model', 'hlstm' , 'name of the rnn part')
+tf.app.flags.DEFINE_string('log_dir', './log/hlstm_8', 'the logging dir')
 
-tf.app.flags.DEFINE_integer('image_height', 60, 'image height')
+tf.app.flags.DEFINE_string('infer_dir', './data/infer/', 'the infer data dir')
+tf.app.flags.DEFINE_boolean('restore', False, 'whether to restore from the latest checkpoint')
+tf.app.flags.DEFINE_float('initial_learning_rate', 1e-3, 'inital lr')
+tf.app.flags.DEFINE_integer('image_height', 32, 'image height')
 tf.app.flags.DEFINE_integer('image_width', 180, 'image width')
 tf.app.flags.DEFINE_integer('image_channel', 1, 'image channels as input')
-
-tf.app.flags.DEFINE_integer('max_stepsize', 64, 'max stepsize in lstm, as well as '
-                                                'the output channels of last layer in CNN')
-tf.app.flags.DEFINE_integer('num_hidden', 128, 'number of hidden units in lstm')
+tf.app.flags.DEFINE_integer('max_stepsize', 45, 'max stepsize in lstm, as well as '                                             'the output channels of last layer in CNN')
+tf.app.flags.DEFINE_integer('num_hidden', 256, 'number of hidden units in lstm')
 tf.app.flags.DEFINE_integer('num_epochs', 10000, 'maximum epochs')
-tf.app.flags.DEFINE_integer('batch_size', 40, 'the batch_size')
+tf.app.flags.DEFINE_integer('batch_size', 128, 'the batch_size')
 tf.app.flags.DEFINE_integer('save_steps', 1000, 'the step to save checkpoint')
 tf.app.flags.DEFINE_integer('validation_steps', 500, 'the step to validation')
-
 tf.app.flags.DEFINE_float('decay_rate', 0.98, 'the lr decay rate')
 tf.app.flags.DEFINE_float('beta1', 0.9, 'parameter of adam optimizer beta1')
 tf.app.flags.DEFINE_float('beta2', 0.999, 'adam parameter beta2')
-
 tf.app.flags.DEFINE_integer('decay_steps', 10000, 'the lr decay_step for optimizer')
 tf.app.flags.DEFINE_float('momentum', 0.9, 'the momentum')
 
-tf.app.flags.DEFINE_string('train_dir', './imgs/train/', 'the train data dir')
-tf.app.flags.DEFINE_string('val_dir', './imgs/val/', 'the val data dir')
-tf.app.flags.DEFINE_string('infer_dir', './imgs/infer/', 'the infer data dir')
-tf.app.flags.DEFINE_string('log_dir', './log', 'the logging dir')
-tf.app.flags.DEFINE_string('mode', 'train', 'train, val or infer')
-tf.app.flags.DEFINE_integer('num_gpus', 0, 'num of gpus')
+tf.app.flags.DEFINE_string('train_dir','../VGGWordSynDat/TrainDat/', 'the train data dir')
+tf.app.flags.DEFINE_string('val_dir','../VGGWordSynDat/TrainDat/', 'the val data dir')
 
+tf.app.flags.DEFINE_string('mode', 'train', 'train, val or infer')
+tf.app.flags.DEFINE_integer('num_gpus', 1, 'num of gpus')
 
 FLAGS = tf.app.flags.FLAGS
 
 # num_batches_per_epoch = int(num_train_samples/FLAGS.batch_size)
 
-charset = '0123456789+-*()'
 encode_maps = {}
 decode_maps = {}
-for i, char in enumerate(charset, 1):
-    encode_maps[char] = i
-    decode_maps[i] = char
 
-SPACE_INDEX = 0
-SPACE_TOKEN = ''
-encode_maps[SPACE_TOKEN] = SPACE_INDEX
-decode_maps[SPACE_INDEX] = SPACE_TOKEN
+with open("./codedict_62.txt") as f:
+    i = 1
+    for line in f.readlines():
+        line = line.split(' ')
+        #line[1] = int(line[1])
 
+        encode_maps[line[0]] = i
+        decode_maps[i] = line[0]
+        i += 1
+        
+encode_maps[''] = 0
+decode_maps[0] = ''
 
 class DataIterator:
-    def __init__(self, data_dir):
+    def __init__(self, data_dir,istrain=True):
         self.image = []
         self.labels = []
-        for root, sub_folder, file_list in os.walk(data_dir):
-            for file_path in file_list:
-                image_name = os.path.join(root, file_path)
-                im = cv2.imread(image_name, 0).astype(np.float32)/255.
-                # resize to same height, different width will consume time on padding
-                # im = cv2.resize(im, (image_width, image_height))
-                im = np.reshape(im, [FLAGS.image_height, FLAGS.image_width, FLAGS.image_channel])
-                self.image.append(im)
+        if istrain:
+            i=0
+            for root, sub_folder, file_list in os.walk(data_dir):
+                for file_path in file_list:
+                    i+=1
+                    if i%8 == 0:
+                        #print("trainIMG"+str(i))
+                        image_name = os.path.join(root, file_path)
+                        #print('_______')
+                        #print(image_name)
+                        if os.path.exists(image_name):
+                            try:
 
-                # image is named as /.../<folder>/00000_abcd.png
-                code = image_name.split('/')[-1].split('_')[1].split('.')[0]
-                code = [SPACE_INDEX if code == SPACE_TOKEN else encode_maps[c] for c in list(code)]
-                self.labels.append(code)
+                                im = io.imread(image_name,as_grey=True)
+                                im = transform.resize(im, (FLAGS.image_height, FLAGS.image_width, FLAGS.image_channel))
+
+                                self.image.append(im)
+                                # image is named as /.../<folder>/00000_abcd.png
+                                code = image_name.split('/')[-1].split('_')[-2]
+                                code = [encode_maps[c] for c in list(code)]
+                                self.labels.append(code)
+                            except:
+                                continue
+        else:
+            i=0
+            for root, sub_folder, file_list in os.walk(data_dir):
+                for file_path in file_list:
+                    i+=1
+                    if i % 8 !=0 and (i+1)%800==0:
+                        image_name = os.path.join(root, file_path)
+                        #print('_______')
+                        #print(image_name)
+
+                        #print("val_img"+str(i))
+                        if os.path.exists(image_name):
+                            try:
+
+                                im = io.imread(image_name,as_grey=True)
+                                im = transform.resize(im, (FLAGS.image_height, FLAGS.image_width, FLAGS.image_channel))
+
+                                self.image.append(im)
+                                # image is named as /.../<folder>/00000_abcd.png
+                                code = image_name.split('/')[-1].split('_')[-2]
+                                code = [encode_maps[c] for c in list(code)]
+                                self.labels.append(code)
+                            except :
+                                continue
 
     @property
     def size(self):
@@ -162,7 +200,7 @@ def eval_expression(encoded_list):
             continue
 
     with open('./result.txt') as f:
-        for ith in xrange(len(encoded_list)):
+        for ith in range(len(encoded_list)):
             f.write(encoded_list[ith] + ' ' + eval_rs[ith] + '\n')
 
     return eval_rs
