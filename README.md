@@ -1,13 +1,13 @@
 # CNN_LSTM_CTC_Tensorflow
 
-**Different RNN structures**
-
-HLSTM
-RHN
-LSTM
-NLSTM
-
 CNN+LSTM+CTC based OCR(Optical Character Recognition) implemented using tensorflow. 
+
+
+**Different RNN structures**
+HLSTM.
+RHN.
+LSTM.
+NLSTM.
 
 **Update 2018-1-2**:
 Some big bugs have fixed...  The length of max_steps in RNN
